@@ -1,0 +1,186 @@
+---
+title: "R_final Project"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-12-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+Variables:
+earnings (weekly or hourly)
+hours (if using weekly earnings)
+occupation (4-digit census OCC code)
+industry
+education
+age
+gender, race
+union status
+full-time/part-time
+geography (state or metro)
+
+```{r}
+
+library(tidyverse)
+#AI exposure data:
+library(haven)
+
+occ_creative_weight <- read_dta("R projects/occ_creative_weight.dta")
+View(occ_creative_weight)
+
+head(occ_creative_weight)
+
+#CPS data:
+library(ipumsr)
+
+ddi <- read_ipums_ddi("R projects/cps_00002.xml")
+cps <- read_ipums_micro(ddi)
+
+
+head(cps)
+
+cps_long <- pivot_longer(
+  cps,
+  cols = -CPSIDP,
+  names_to = c(".value", "wave"),
+  names_pattern = "(.+)([12])"
+)
+cps_long$OCC_ <- as.character(cps_long$OCC_)
+
+
+head(cps_long)
+glimpse(cps_long)
+
+
+
+```
+
+```{r}
+#tidy/put in long format/ join together\
+#occ_code and OCC_
+occ_code_4 = substr(occ_creative_weight$occ_code, 4, 7) 
+
+occ_creative_weight2 <- occ_creative_weight %>% 
+  mutate(new_occ_code = occ_code_4) %>% 
+  select(new_occ_code, occ_title, avg_creative_weight)
+
+head(occ_creative_weight2)
+glimpse(occ_creative_weight2)
+sum(duplicated(occ_creative_weight2$new_occ_code))
+
+occ_creative_weight2_unique <- occ_creative_weight2 %>%
+  distinct(new_occ_code, .keep_all = TRUE)
+
+together <- cps_long %>% 
+  left_join(occ_creative_weight2_unique, by = c("OCC_" = "new_occ_code"))
+
+head(together)
+glimpse(together)
+
+```
+
+```{r}
+#Run regressions:
+summary(lm(log(HOURWAGE_) ~ avg_creative_weight + YEAR_ + STATEFIP_ + METRO_ + SEX_ + IND_ + UNION_ + EDUC_ + ASECWT_ + PAIDHOUR_, data = together, weights = ASECWTH_, na.action = na.omit))
+
+```
+
+```{r}
+#shiny app
+library(shiny)
+
+ui <- fluidPage(
+  
+  titlePanel("Run Wage Regressions"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      helpText("Choose predictor (X) variables:"),
+
+      selectInput(
+        inputId = "xvars",
+        label = "Select X variables",
+        choices = names(together),     
+        multiple = TRUE,
+        selected = c("avg_creative_weight") 
+      ),
+      
+      actionButton("run", "Run Regression")
+    ),
+    
+    mainPanel(
+  tabsetPanel(
+    tabPanel("Summary",
+             verbatimTextOutput("model_summary")
+    ),
+    tabPanel("Predicted vs Actual",
+             plotOutput("pred_plot")
+    ),
+    tabPanel("Residual Plot",
+             plotOutput("resid_plot")
+    ),
+    tabPanel("Distributions",
+             selectInput("dist_var", "Select variable:", choices = names(df)),
+             plotOutput("dist_plot")
+    )
+  )
+)
+  )
+)
+
+server <- function(input, output, session) {
+  
+  observeEvent(input$run, {
+    
+    # ensure at least one x-variable
+    req(input$xvars)
+    
+    # Build formula dynamically
+    f <- as.formula(
+      paste0("log(HOURWAGE_) ~ ", paste(input$xvars, collapse = " + "))
+    )
+    
+    # Run regression
+    model <- lm(f, data = together)
+    
+    # Print summary
+    output$modelOut <- renderPrint({
+      summary(model)
+    
+    output$pred_plot <- renderPlot({
+    mod <- model_fit()
+    preds <- predict(mod)
+    actual <- df$HOURWAGE_
+
+    plot(actual, preds,
+         pch = 20,
+         xlab = "Actual Hourly Wage",
+         ylab = "Predicted Hourly Wage")
+    abline(0, 1, lwd = 2)
+})
+    output$resid_plot <- renderPlot({
+    mod <- model_fit()
+    plot(residuals(mod),
+         ylab = "Residuals",
+         xlab = "Index",
+         pch = 20)
+    abline(h = 0, lwd = 2)
+})
+      
+    
+    })
+  })
+}
+
+shinyApp(ui, server)
+
+
+
+
+```
+
